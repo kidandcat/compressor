@@ -6,14 +6,13 @@ const fs = require('fs');
 let obj = {};
 let final = [];
 let memory = [];
-let aFile2 = [];
 let countertick = 0;
 let countertickglobal = 0;
 let comparations = 0;
 let findings = 0;
 let mappings = 0;
 let totalCoincidences = 0;
-let totalCounter = 0;
+let globalStep = 0;
 
 if (process.argv[2] == 'compress') {
     compress(process.argv[3], process.argv[4], process.argv[5], (r) => {
@@ -53,22 +52,20 @@ function compress(target, dataSource, step, cb, debug) {
     final = [];
     memory = [];
 
-    readChunky(dataSource, 1, (chunk) => {
-        aFile2.push(chunk);
-    }).then(() => {
-        readChunky(target, 1, (chunk) => {
-            final.push({
-                chunk: chunk,
-                got: false
-            });
-        }).then(() => {
-            fusion(target, dataSource, step, debug, cb);
+    readChunky(target, 1, (chunk) => {
+        final.push({
+            chunk: chunk,
+            got: false
         });
+    }).then(() => {
+        fusion(target, dataSource, step, debug, cb);
     });
 }
 
 function fusion(file1, file2, step, debug, cb) {
+    globalStep = step;
     step = parseInt(step);
+    mem();
     readChunky(file1, step, (chunk) => {
         memory.push({
             chunk: chunk,
@@ -78,38 +75,35 @@ function fusion(file1, file2, step, debug, cb) {
         let coincidences = 0;
         let counter = 0;
 
-        aFile2.forEach((chunk) => {
-            compare(chunk, counter, step, (res) => {
-              totalCoincidences++;
-                if (res){
-                  coincidences++;
+        readChunky(file2, step, (chunk) => {
+            if (compare(chunk, counter, step)) {
+                totalCoincidences++;
+                coincidences++;
+            }
+            counter++;
+        }).then(() => {
+            memory.forEach((c) => {
+                mappings++;
+                if (c.got.lock && !final[memory.indexOf(c)].got.lock) {
+                    final[memory.indexOf(c)] = c;
                 }
             });
-            counter++;
-            totalCounter++;
-        });
-
-        memory.forEach((c) => {
-            mappings++;
-            if (c.got.lock && !final[memory.indexOf(c)].got.lock) {
-                final[memory.indexOf(c)] = c;
+            memory = [];
+            if (step > 1) {
+                fusion(file1, file2, --step, debug, cb);
+            } else {
+                let res = final.map((r) => {
+                    if (r.got.size) {
+                        return {
+                            index: final.indexOf(r),
+                            position: r.got.position,
+                            size: r.got.size
+                        };
+                    }
+                });
+                cb(cleanArray(res));
             }
         });
-        memory = [];
-        if (step > 1) {
-            fusion(file1, file2, --step, debug, cb);
-        } else {
-            let res = final.map((r) => {
-                if (r.got.size) {
-                    return {
-                        index: final.indexOf(r),
-                        position: r.got.position,
-                        size: r.got.size
-                    };
-                }
-            });
-            cb(cleanArray(res));
-        }
     });
 }
 
@@ -118,14 +112,10 @@ function readChunky(file, step, cb, end) {
     var success = function(c) {};
     var error = function(c) {};
     //Promise
-    fs.readFile(file, function(err, data) {
-        if (err) throw err;
-        data.forEach((b) => {
-          setImmediate(()=>{
-            cb(new Buffer([b]));
-          });
-        });
-        success();
+    fs.open(file, 'r', function(err, fd) {
+        if (err)
+            throw err;
+        chunkychunky(fd, step, cb, success);
     });
     //Promise
     return {
@@ -138,6 +128,19 @@ function readChunky(file, step, cb, end) {
             return this;
         }
     };
+}
+
+function chunkychunky(fd, step, cb, success) {
+    var buffer = new Buffer(step);
+    var num = fs.readSync(fd, buffer, 0, step, null);
+    if (num === 0) {
+        success();
+    } else {
+        cb(buffer);
+        setImmediate(() => {
+            chunkychunky(fd, step, cb, success);
+        });
+    }
 }
 
 function cleanArray(actual) {
@@ -183,26 +186,27 @@ function compare(chunk, position, size, cb) {
             }
         }
     });
-    //return res;
-    cb(res);
+    return res;
 }
 
 
-mem();
+mem(true);
 
-function mem() {
+function mem(repeat) {
+    repeat = repeat || false;
     let me = (Math.floor(process.memoryUsage().rss / 1000 / 1000));
     process.stdout.write('\033c');
     console.log('Memory: ' + me + 'MB' + "\n");
-    console.log(`DataSource: ${aFile2.length}`);
+    console.log(`Step: ${globalStep}`);
     console.log(`Final: ${final.length}`);
     console.log(`Memory: ${memory.length}`);
     console.log(`Comparations: ${comparations}`);
     console.log(`Coincidences: ${totalCoincidences}`);
-    console.log(`Counter: ${totalCounter}`);
     console.log(`Findings: ${findings}`);
     console.log(`Mappings: ${mappings}`);
-    setTimeout(() => {
-        mem();
-    }, 100);
+    if (repeat) {
+        setTimeout(() => {
+            mem(true);
+        }, 200);
+    }
 }
